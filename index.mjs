@@ -1,5 +1,5 @@
-import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
-import { createHash } from "node:crypto";
+import { DynamoDBClient, PutItemCommand, ScanCommand } from "@aws-sdk/client-dynamodb";
+import { randomUUID } from "node:crypto";
 
 const TABLE_NAME = "lemonade-registrations";
 const client = new DynamoDBClient({ region: "eu-west-1" });
@@ -7,8 +7,14 @@ const client = new DynamoDBClient({ region: "eu-west-1" });
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? event.httpMethod ?? "GET";
 
+  const path = event.rawPath ?? event.path ?? "/";
+
   if (method === "POST") {
     return handlePost(event);
+  }
+
+  if (path === "/registrations") {
+    return handleRegistrations();
   }
 
   return {
@@ -40,33 +46,124 @@ async function handlePost(event) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: "Prašome pasirinkti vaidmenį." }) };
   }
 
-  const sourceIp = event.requestContext?.http?.sourceIp ?? event.requestContext?.identity?.sourceIp ?? "unknown";
-  const userAgent = event.headers?.["user-agent"] ?? event.headers?.["User-Agent"] ?? "unknown";
-  const fingerprint = createHash("sha256").update(sourceIp + userAgent).digest("hex");
+  const fingerprint = (body.fingerprint ?? "").trim();
 
   try {
     await client.send(
       new PutItemCommand({
         TableName: TABLE_NAME,
         Item: {
-          id: { S: fingerprint },
+          id: { S: randomUUID() },
+          fingerprint: { S: fingerprint },
           name: { S: name },
           role: { S: role },
           registeredAt: { S: new Date().toISOString() },
         },
-        ConditionExpression: "attribute_not_exists(id)",
       })
     );
 
     return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
   } catch (err) {
-    if (err.name === "ConditionalCheckFailedException") {
-      return { statusCode: 409, headers, body: JSON.stringify({ error: "Jūs jau esate užsiregistravę!" }) };
-    }
-
     console.error("[Registration] DynamoDB put failed:", err);
     return { statusCode: 500, headers, body: JSON.stringify({ error: "Įvyko klaida. Bandykite dar kartą." }) };
   }
+}
+
+const ROLE_LABELS = { participant: "Dalyvis", judge: "Teisėjas", any: "Nesvarbu" };
+
+async function handleRegistrations() {
+  try {
+    const data = await client.send(new ScanCommand({ TableName: TABLE_NAME }));
+    const items = (data.Items ?? [])
+      .map((item) => ({
+        name: item.name?.S ?? "",
+        role: ROLE_LABELS[item.role?.S] ?? item.role?.S ?? "",
+        registeredAt: item.registeredAt?.S ?? "",
+        fingerprint: (item.fingerprint?.S ?? "").slice(0, 8),
+      }))
+      .sort((a, b) => a.registeredAt.localeCompare(b.registeredAt));
+
+    return {
+      statusCode: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+      body: getRegistrationsHtml(items),
+    };
+  } catch (err) {
+    console.error("[Registrations] DynamoDB scan failed:", err);
+    return {
+      statusCode: 500,
+      headers: { "content-type": "text/html; charset=utf-8" },
+      body: "Klaida gaunant registracijas.",
+    };
+  }
+}
+
+function getRegistrationsHtml(items) {
+  const rows = items
+    .map(
+      (item, i) =>
+        `<tr><td>${i + 1}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.role)}</td><td>${formatDate(item.registeredAt)}</td><td><code>${escapeHtml(item.fingerprint)}</code></td></tr>`
+    )
+    .join("");
+
+  return `<!DOCTYPE html>
+<html lang="lt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Registracijos</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #fef9e7 0%, #eafaf1 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 640px; width: 100%; }
+    h1 { text-align: center; color: #2c3e50; font-size: 1.5rem; margin-bottom: 0.5rem; }
+    .count { text-align: center; color: #888; margin-bottom: 1.5rem; }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; color: #888; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.5rem 0.75rem; border-bottom: 2px solid #f1c40f; }
+    td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #f0f0f0; color: #333; }
+    tr:last-child td { border-bottom: none; }
+    .empty { text-align: center; color: #aaa; padding: 2rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Registracijos</h1>
+    <p class="count">Iš viso: ${items.length}</p>
+    <div class="card">
+      ${items.length === 0
+        ? '<p class="empty">Kol kas registracijų nėra.</p>'
+        : `<table>
+        <thead><tr><th>#</th><th>Vardas</th><th>Vaidmuo</th><th>Data</th><th>Hash</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function formatDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("lt-LT", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function getHtml() {
@@ -397,6 +494,15 @@ function getHtml() {
     const msg = document.getElementById("message");
     const btn = document.getElementById("submitBtn");
 
+    function getFingerprint() {
+      let fp = localStorage.getItem("lemonade_fp");
+      if (!fp) {
+        fp = crypto.randomUUID();
+        localStorage.setItem("lemonade_fp", fp);
+      }
+      return fp;
+    }
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       msg.className = "message";
@@ -404,6 +510,7 @@ function getHtml() {
 
       const name = document.getElementById("name").value.trim();
       const role = form.role.value;
+      const fingerprint = getFingerprint();
 
       if (!name) {
         showMsg("Prašome įvesti vardą.", true);
@@ -417,7 +524,7 @@ function getHtml() {
         const res = await fetch(window.location.href, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, role }),
+          body: JSON.stringify({ name, role, fingerprint }),
         });
 
         const data = await res.json();

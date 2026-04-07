@@ -36,7 +36,7 @@ The Lambda execution role needs the following policy:
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": "dynamodb:PutItem",
+      "Action": ["dynamodb:PutItem", "dynamodb:Scan"],
       "Resource": "arn:aws:dynamodb:eu-west-1:<ACCOUNT_ID>:table/lemonade-registrations"
     }
   ]
