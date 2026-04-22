@@ -441,9 +441,9 @@ function getHtml() {
       <p class="steps-title"><strong>Konkurso eiga:</strong></p>
       <ol class="steps">
         <li>Registruojatės</li>
-        <li>Išsirenkate limonadą &mdash; nugalėtoją</li>
+        <li>Išsirenkate limonadą, kuris jūsų nuomone vertas nugalėtojo titulo</li>
         <li>Pasiruošiate minutę pristatyti kodėl šitas limonadas geriausias prieš komisiją <span class="note">(formatas nesvarbu, esant specifiniams poreikiams kreipkitės <a href="mailto:tomas@valiunas.dev">tomas@valiunas.dev</a>)</span></li>
-        <li>Pristatote limonadą</li>
+        <li>Pristatote ir komisijai duodate paragauti savo limonado</li>
         <li>Komisija ragauja ir vertina limonadą</li>
         <li>Laimite?</li>
       </ol>
